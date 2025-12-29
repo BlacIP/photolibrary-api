@@ -1,0 +1,96 @@
+import swaggerJsdoc from 'swagger-jsdoc';
+
+const options: swaggerJsdoc.Options = {
+    definition: {
+        openapi: '3.0.0',
+        info: {
+            title: 'PhotoLibrary API',
+            version: '1.0.0',
+            description: 'RESTful API for managing photo galleries and clients with Cloudinary integration',
+            contact: {
+                name: 'API Support',
+            },
+        },
+        servers: [
+            {
+                url: process.env.API_URL || 'http://localhost:3001',
+                description: 'Development server',
+            },
+            {
+                url: 'https://your-api.vercel.app',
+                description: 'Production server',
+            },
+        ],
+        components: {
+            securitySchemes: {
+                bearerAuth: {
+                    type: 'http',
+                    scheme: 'bearer',
+                    bearerFormat: 'JWT',
+                    description: 'Enter your JWT token',
+                },
+                cookieAuth: {
+                    type: 'apiKey',
+                    in: 'cookie',
+                    name: 'token',
+                    description: 'JWT token in HTTP-only cookie',
+                },
+            },
+            schemas: {
+                Client: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        name: { type: 'string' },
+                        slug: { type: 'string' },
+                        event_date: { type: 'string', format: 'date' },
+                        subheading: { type: 'string', nullable: true },
+                        status: { type: 'string', enum: ['ACTIVE', 'ARCHIVED'] },
+                        header_media_url: { type: 'string', nullable: true },
+                        header_media_type: { type: 'string', enum: ['image', 'video'], nullable: true },
+                        created_at: { type: 'string', format: 'date-time' },
+                        photo_count: { type: 'integer' },
+                    },
+                },
+                Photo: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        client_id: { type: 'string', format: 'uuid' },
+                        url: { type: 'string' },
+                        filename: { type: 'string' },
+                        public_id: { type: 'string' },
+                        uploaded_by: { type: 'string', format: 'uuid' },
+                        uploaded_at: { type: 'string', format: 'date-time' },
+                    },
+                },
+                User: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        email: { type: 'string', format: 'email' },
+                        name: { type: 'string' },
+                        role: { type: 'string', enum: ['SUPER_ADMIN', 'SUPER_ADMIN_MAX', 'ADMIN'] },
+                        permissions: { type: 'array', items: { type: 'string' } },
+                        created_at: { type: 'string', format: 'date-time' },
+                    },
+                },
+                Error: {
+                    type: 'object',
+                    properties: {
+                        error: { type: 'string' },
+                        message: { type: 'string' },
+                    },
+                },
+            },
+        },
+        security: [
+            {
+                cookieAuth: [],
+            },
+        ],
+    },
+    apis: ['./src/routes/*.ts', './src/controllers/*.ts'],
+};
+
+export const swaggerSpec = swaggerJsdoc(options);
