@@ -117,10 +117,28 @@ function getDynamicSwaggerSpec(req: express.Request) {
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
     
     // Get host from request
-    const host = req.get('host') || req.headers.host || 'localhost:3001';
+    const requestHost = req.get('host') || req.headers.host || 'localhost:3001';
     
-    // Construct base URL
-    const baseUrl = `${protocol}://${host}`;
+    // Determine the base URL to use
+    let baseUrl: string;
+    
+    // Priority 1: Use explicit API_URL or PRODUCTION_URL environment variable
+    if (process.env.API_URL || process.env.PRODUCTION_URL) {
+        baseUrl = process.env.API_URL || process.env.PRODUCTION_URL || '';
+        // Ensure it has protocol
+        if (!baseUrl.startsWith('http')) {
+            baseUrl = `https://${baseUrl}`;
+        }
+    }
+    // Priority 2: If on Vercel preview deployment, use production URL
+    else if (requestHost.includes('vercel.app') && requestHost !== 'photolibrary-api.vercel.app') {
+        // This is a preview deployment, use production URL
+        baseUrl = 'https://photolibrary-api.vercel.app';
+    }
+    // Priority 3: Use current request host (for localhost or production)
+    else {
+        baseUrl = `${protocol}://${requestHost}`;
+    }
     
     // Clone the swagger spec and update servers
     const dynamicSpec = JSON.parse(JSON.stringify(swaggerSpec));
