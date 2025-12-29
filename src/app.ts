@@ -61,7 +61,7 @@ app.get('/api-docs/theme.js', (req, res) => {
 });
 
 // Swagger documentation
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+const swaggerUiOptions = {
     customCss: `
       .swagger-ui .topbar { display: none }
       
@@ -90,8 +90,13 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
         'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.18.2/swagger-ui-bundle.min.js',
         'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.18.2/swagger-ui-standalone-preset.min.js',
         '/api-docs/theme.js'
-    ]
-}));
+    ],
+    swaggerOptions: {
+        url: '/api-docs.json'
+    }
+};
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, swaggerUiOptions));
 
 // API routes
 app.use('/api', authRoutes);

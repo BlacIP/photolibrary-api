@@ -93,4 +93,14 @@ const options: swaggerJsdoc.Options = {
     apis: ['./src/routes/*.ts', './src/controllers/*.ts'],
 };
 
-export const swaggerSpec = swaggerJsdoc(options);
+import path from 'path';
+
+export const swaggerSpec = swaggerJsdoc({
+    ...options,
+    apis: [
+        path.join(__dirname, '../routes/*.ts'),
+        path.join(__dirname, '../controllers/*.ts'),
+        path.join(__dirname, '../routes/*.js'),
+        path.join(__dirname, '../controllers/*.js'),
+    ],
+});
