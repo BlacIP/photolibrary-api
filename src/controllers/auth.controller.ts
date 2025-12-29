@@ -76,11 +76,14 @@ export async function login(req: AuthRequest, res: Response): Promise<void> {
         });
 
         // Set HTTP-only cookie
+        // For cross-domain (frontend and backend on different Vercel domains),
+        // we need sameSite: 'none' and secure: true
         res.cookie('token', token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
+            secure: process.env.NODE_ENV === 'production' || process.env.VERCEL ? true : false,
+            sameSite: process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'none' : 'lax',
             expires,
+            path: '/',
         });
 
         res.json({
@@ -114,7 +117,13 @@ export async function login(req: AuthRequest, res: Response): Promise<void> {
  *         description: Logout successful
  */
 export async function logout(req: AuthRequest, res: Response): Promise<void> {
-    res.clearCookie('token');
+    // Clear cookie with same settings as when it was set (for cross-domain)
+    res.clearCookie('token', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production' || process.env.VERCEL ? true : false,
+        sameSite: process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'none' : 'lax',
+        path: '/',
+    });
     res.json({ success: true });
 }
 
