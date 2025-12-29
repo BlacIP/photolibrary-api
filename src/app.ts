@@ -111,10 +111,36 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Helper function to generate dynamic swagger spec with current server URL
+function getDynamicSwaggerSpec(req: express.Request) {
+    // Detect protocol (Vercel uses x-forwarded-proto header)
+    const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
+    
+    // Get host from request
+    const host = req.get('host') || req.headers.host || 'localhost:3001';
+    
+    // Construct base URL
+    const baseUrl = `${protocol}://${host}`;
+    
+    // Clone the swagger spec and update servers
+    const dynamicSpec = JSON.parse(JSON.stringify(swaggerSpec));
+    
+    // Update servers array with dynamic URL
+    dynamicSpec.servers = [
+        {
+            url: baseUrl,
+            description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Current server',
+        },
+    ];
+    
+    return dynamicSpec;
+}
+
 // Swagger JSON endpoint
 app.get('/api-docs.json', (req, res) => {
     res.setHeader('Content-Type', 'application/json');
-    res.send(swaggerSpec);
+    const dynamicSpec = getDynamicSwaggerSpec(req);
+    res.send(dynamicSpec);
 });
 
 // Error handler (must be last)

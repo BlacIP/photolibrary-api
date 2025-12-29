@@ -13,12 +13,16 @@ const options: swaggerJsdoc.Options = {
         },
         servers: [
             {
-                url: process.env.API_URL || 'http://localhost:3001',
-                description: 'Development server',
-            },
-            {
-                url: 'https://your-api.vercel.app',
-                description: 'Production server',
+                url: (() => {
+                    // Priority: API_URL > VERCEL_URL > localhost
+                    const url = process.env.API_URL || process.env.VERCEL_URL || 'http://localhost:3001';
+                    // If VERCEL_URL doesn't have protocol, add https://
+                    if (url === process.env.VERCEL_URL && !url.startsWith('http')) {
+                        return `https://${url}`;
+                    }
+                    return url;
+                })(),
+                description: 'Default server (will be overridden by dynamic endpoint)',
             },
         ],
         components: {
