@@ -16,9 +16,46 @@ import galleryRoutes from './routes/gallery.routes';
 
 const app: Application = express();
 
-// Middleware
+// CORS configuration - support multiple origins
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) {
+            return callback(null, true);
+        }
+        
+        // Explicit FRONTEND_URL takes priority
+        if (process.env.FRONTEND_URL) {
+            const allowedUrls = process.env.FRONTEND_URL.split(',').map(url => url.trim());
+            if (allowedUrls.includes(origin)) {
+                return callback(null, true);
+            }
+        }
+        
+        // Allow localhost for development
+        if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+            return callback(null, true);
+        }
+        
+        // In production/Vercel, allow Vercel domains
+        if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+            // Allow any *.vercel.app domain (for preview deployments and production)
+            if (origin.includes('.vercel.app')) {
+                return callback(null, true);
+            }
+            
+            // Also allow explicit production frontend URL if set
+            // You can set FRONTEND_URL in Vercel dashboard: https://photolibrary.vercel.app
+        }
+        
+        // Default: allow in development, block in production
+        if (process.env.NODE_ENV === 'production') {
+            console.warn(`CORS: Blocked origin ${origin}`);
+            callback(new Error('Not allowed by CORS'));
+        } else {
+            callback(null, true);
+        }
+    },
     credentials: true,
 }));
 app.use(express.json());
