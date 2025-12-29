@@ -3,6 +3,13 @@ import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import cloudinary from '../lib/cloudinary';
 
+async function getStatusTimestampColumn(): Promise<'status_updated_at' | 'created_at'> {
+    const res = await pool.query(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'clients' AND column_name = 'status_updated_at') AS \"exists\""
+    );
+    return res.rows[0]?.exists ? 'status_updated_at' : 'created_at';
+}
+
 /**
  * @swagger
  * /api/admin/storage:
@@ -19,38 +26,68 @@ export async function getStorageStats(req: AuthRequest, res: Response): Promise<
             return;
         }
 
-        // 1. Database Stats
-        const photosCountRes = await pool.query('SELECT COUNT(*) as count, SUM(size) as size FROM photos');
-        const totalPhotos = parseInt(photosCountRes.rows[0].count || '0');
-        const dbTotalBytes = parseInt(photosCountRes.rows[0].size || '0'); // Assuming you have a size column? If not, valid to omit or estimate.
+        // Detect if photos.size column exists to avoid failing on missing column
+        const sizeColumnRes = await pool.query(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'photos' AND column_name = 'size') AS \"exists\""
+        );
+        const hasSizeColumn = Boolean(sizeColumnRes.rows[0]?.exists);
 
-        // Check if 'size' column exists in photos, if not we might need to skip or fallback. 
-        // For now let's assume it doesn't and just count photos.
-        // Actually, let's verify schema later. For now, I'll return what I can.
+        const statusTimestampColumn = await getStatusTimestampColumn();
 
-        // 2. Client Stats (Deleted/Archived)
-        const clientsRes = await pool.query(`
+        // 1. Database Stats (counts + optional bytes)
+        const photosCountRes = await pool.query(
+            hasSizeColumn
+                ? 'SELECT COUNT(*) as count, COALESCE(SUM(size), 0) as size FROM photos'
+                : 'SELECT COUNT(*) as count FROM photos'
+        );
+        const totalPhotos = parseInt(photosCountRes.rows[0].count || '0', 10);
+        const dbTotalBytes = hasSizeColumn
+            ? parseInt(photosCountRes.rows[0].size || '0', 10)
+            : 0;
+
+        // 2. Client Stats (Archived/Deleted breakdown + per-client totals)
+        const clientsRes = await pool.query(
+            `
             SELECT 
-                c.id, c.name, c.status, c.updated_at as "statusUpdatedAt",
+                c.id, 
+                c.name, 
+                c.status, 
+                COALESCE(c.${statusTimestampColumn}, c.created_at) as "statusUpdatedAt",
                 COUNT(p.id) as photo_count
+                ${hasSizeColumn ? ', COALESCE(SUM(p.size), 0) as total_bytes' : ', 0::bigint as total_bytes'}
             FROM clients c
             LEFT JOIN photos p ON c.id = p.client_id
             GROUP BY c.id
-        `);
+            ORDER BY c.created_at DESC
+        `
+        );
+        const clients = clientsRes.rows;
 
-        // Calculate bytes for archived/deleted based on assumptions or actual logic if we had size
-        // If we don't track size in DB, we can't give accurate bytes.
-        // Let's assume for now we just return counts and 0 bytes if unknown.
-
-        const statusStats = {
+        // Aggregate archived/deleted bytes if size column exists
+        let statusStats = {
             archived_bytes: 0,
-            deleted_bytes: 0
+            deleted_bytes: 0,
         };
 
-        const clients = clientsRes.rows.map(c => ({
-            ...c,
-            total_bytes: 0 // Placeholder
-        }));
+        if (hasSizeColumn) {
+            const statusAggRes = await pool.query(
+                `
+                SELECT c.status, COALESCE(SUM(p.size), 0) as bytes
+                FROM clients c
+                LEFT JOIN photos p ON p.client_id = c.id
+                GROUP BY c.status
+            `
+            );
+
+            statusAggRes.rows.forEach((row) => {
+                if (row.status === 'ARCHIVED') {
+                    statusStats.archived_bytes = parseInt(row.bytes || '0', 10);
+                }
+                if (row.status === 'DELETED' || row.status === 'DELETED_FOREVER') {
+                    statusStats.deleted_bytes += parseInt(row.bytes || '0', 10);
+                }
+            });
+        }
 
         // 3. Cloudinary Stats
         let cloudinaryStats = null;
@@ -92,6 +129,8 @@ export async function runCleanup(req: AuthRequest, res: Response): Promise<void>
             return;
         }
 
+        const statusTimestampColumn = await getStatusTimestampColumn();
+
         // Logic:
         // 1. Recycle Bin (DELETED) > 7 days -> DELETED_FOREVER
         // 2. Archive (ARCHIVED) > 30 days -> DELETED (Recycle Bin)
@@ -101,12 +140,15 @@ export async function runCleanup(req: AuthRequest, res: Response): Promise<void>
         archiveThreshold.setDate(archiveThreshold.getDate() - 30);
 
         const toRecycle = await pool.query(
-            "SELECT id FROM clients WHERE status = 'ARCHIVED' AND updated_at < $1",
+            `SELECT id FROM clients WHERE status = 'ARCHIVED' AND ${statusTimestampColumn} < $1`,
             [archiveThreshold]
         );
 
         for (const row of toRecycle.rows) {
-            await pool.query("UPDATE clients SET status = 'DELETED', updated_at = NOW() WHERE id = $1", [row.id]);
+            await pool.query(
+                `UPDATE clients SET status = 'DELETED', ${statusTimestampColumn} = NOW() WHERE id = $1`,
+                [row.id]
+            );
         }
 
         // Find DELETED > 7 days
@@ -114,7 +156,7 @@ export async function runCleanup(req: AuthRequest, res: Response): Promise<void>
         deleteThreshold.setDate(deleteThreshold.getDate() - 7);
 
         const toDelete = await pool.query(
-            "SELECT id FROM clients WHERE status = 'DELETED' AND updated_at < $1",
+            `SELECT id FROM clients WHERE status = 'DELETED' AND ${statusTimestampColumn} < $1`,
             [deleteThreshold]
         );
 
