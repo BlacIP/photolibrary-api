@@ -9,6 +9,7 @@ import clientsRoutes from './routes/clients.routes';
 import authRoutes from './routes/auth.routes';
 import usersRoutes from './routes/users.routes';
 import adminRoutes from './routes/admin.routes';
+import internalRoutes from './routes/internal.routes';
 import photosRoutes from './routes/photos.routes';
 import galleryRoutes from './routes/gallery.routes';
 
@@ -140,6 +141,7 @@ app.use('/api', authRoutes);
 app.use('/api/clients', clientsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/internal', internalRoutes);
 app.use('/api', photosRoutes);
 app.use('/api', galleryRoutes);
 
