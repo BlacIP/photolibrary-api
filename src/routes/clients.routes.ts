@@ -1,5 +1,11 @@
 import { Router } from 'express';
-import { getClients, getClientById, updateClient, deleteClient, createClient } from '../controllers/clients.controller';
+import {
+  listLegacyClients,
+  createLegacyClient,
+  getLegacyClient,
+  updateLegacyClient,
+  deleteLegacyClient,
+} from '../controllers/legacy-admin.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -11,10 +17,10 @@ const router = Router();
  *   description: Client management endpoints
  */
 
-router.get('/', authMiddleware, getClients);
-router.post('/', authMiddleware, createClient);
-router.get('/:id', authMiddleware, getClientById);
-router.put('/:id', authMiddleware, updateClient as any);
-router.delete('/:id', authMiddleware, deleteClient as any);
+router.get('/', authMiddleware, listLegacyClients);
+router.post('/', authMiddleware, createLegacyClient);
+router.get('/:id', authMiddleware, getLegacyClient);
+router.put('/:id', authMiddleware, updateLegacyClient as any);
+router.delete('/:id', authMiddleware, deleteLegacyClient as any);
 
 export default router;

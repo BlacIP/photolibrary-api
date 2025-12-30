@@ -3,6 +3,59 @@ import { pool } from '../lib/db';
 import archiver from 'archiver';
 import https from 'https';
 
+type StudioGallery = {
+    id?: string;
+    name?: string;
+    slug?: string;
+    event_date?: string;
+    subheading?: string | null;
+    status?: string;
+    header_media_url?: string | null;
+    header_media_type?: string | null;
+    photos?: Array<{
+        id?: string;
+        url?: string;
+        filename?: string;
+        public_id?: string;
+        created_at?: string;
+    }>;
+};
+
+function getStudioApiConfig() {
+    const baseUrl = process.env.STUDIO_API_URL || 'http://localhost:4000';
+    const secret = process.env.ADMIN_SYNC_SECRET;
+    if (!baseUrl || !secret) return null;
+    return { baseUrl, secret };
+}
+
+async function callStudioApi(path: string) {
+    const cfg = getStudioApiConfig();
+    if (!cfg) {
+        throw new Error('Studio API config missing');
+    }
+
+    const trimmedPath = path.startsWith('/') ? path.slice(1) : path;
+    const baseUrl = cfg.baseUrl.endsWith('/') ? cfg.baseUrl : `${cfg.baseUrl}/`;
+    const url = new URL(trimmedPath, baseUrl).toString();
+
+    const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+            'x-admin-sync-secret': cfg.secret,
+        },
+    });
+
+    if (res.status === 404) {
+        return null;
+    }
+    if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Studio API error (${res.status}): ${body}`);
+    }
+
+    return res.json();
+}
+
 /**
  * @swagger
  * /api/gallery/{slug}:
@@ -49,7 +102,18 @@ export async function getGallery(req: Request, res: Response): Promise<void> {
     try {
         const { slug } = req.params;
 
-        // Fetch client
+        // Try studio-api legacy gallery first.
+        try {
+            const studioGallery = (await callStudioApi(`/api/internal/legacy/gallery/${slug}`)) as StudioGallery | null;
+            if (studioGallery) {
+                res.json(studioGallery);
+                return;
+            }
+        } catch (error) {
+            console.warn('Studio gallery lookup failed, falling back to legacy DB', error);
+        }
+
+        // Legacy DB fallback
         const clientResult = await pool.query('SELECT * FROM clients WHERE slug = $1', [slug]);
 
         if (clientResult.rows.length === 0) {
@@ -59,7 +123,6 @@ export async function getGallery(req: Request, res: Response): Promise<void> {
 
         const client = clientResult.rows[0];
 
-        // Fetch photos
         const photosResult = await pool.query(
             'SELECT id, url, filename, public_id, created_at FROM photos WHERE client_id = $1 ORDER BY created_at DESC',
             [client.id]
@@ -93,17 +156,29 @@ export async function downloadGallery(req: Request, res: Response): Promise<void
     try {
         const { slug } = req.params;
 
-        // Find client
-        const clientRes = await pool.query('SELECT * FROM clients WHERE slug = $1', [slug]);
-        if (clientRes.rows.length === 0) {
-            res.status(404).json({ error: 'Gallery not found' });
-            return;
+        // Try studio-api legacy gallery first.
+        let client = null;
+        let photos: any[] = [];
+        try {
+            const studioGallery = (await callStudioApi(`/api/internal/legacy/gallery/${slug}`)) as StudioGallery | null;
+            if (studioGallery) {
+                client = studioGallery;
+                photos = Array.isArray(studioGallery.photos) ? studioGallery.photos : [];
+            }
+        } catch (error) {
+            console.warn('Studio gallery lookup failed, falling back to legacy DB', error);
         }
-        const client = clientRes.rows[0];
 
-        // Get all photos
-        const photosRes = await pool.query('SELECT * FROM photos WHERE client_id = $1', [client.id]);
-        const photos = photosRes.rows;
+        if (!client) {
+            const clientRes = await pool.query('SELECT * FROM clients WHERE slug = $1', [slug]);
+            if (clientRes.rows.length === 0) {
+                res.status(404).json({ error: 'Gallery not found' });
+                return;
+            }
+            client = clientRes.rows[0];
+            const photosRes = await pool.query('SELECT * FROM photos WHERE client_id = $1', [client.id]);
+            photos = photosRes.rows;
+        }
 
         if (!photos.length) {
             res.status(400).json({ error: 'No photos to download' });

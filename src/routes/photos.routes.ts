@@ -1,5 +1,9 @@
 import { Router } from 'express';
-import { getUploadSignature, savePhotoRecord, deletePhoto } from '../controllers/photos.controller';
+import {
+  getLegacyUploadSignature,
+  saveLegacyPhotoRecord,
+  deleteLegacyPhoto,
+} from '../controllers/legacy-admin.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -11,8 +15,8 @@ const router = Router();
  *   description: Photo management endpoints
  */
 
-router.post('/photos/upload-signature', authMiddleware, getUploadSignature);
-router.post('/photos/save-record', authMiddleware, savePhotoRecord);
-router.delete('/photos/:id', authMiddleware, deletePhoto);
+router.post('/photos/upload-signature', authMiddleware, getLegacyUploadSignature);
+router.post('/photos/save-record', authMiddleware, saveLegacyPhotoRecord);
+router.delete('/photos/:id', authMiddleware, deleteLegacyPhoto);
 
 export default router;
