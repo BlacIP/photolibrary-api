@@ -118,3 +118,58 @@ export async function syncClientStats(req: Request, res: Response): Promise<void
     res.status(500).json({ error: 'Sync failed' });
   }
 }
+
+export async function syncStudioOwner(req: Request, res: Response): Promise<void> {
+  try {
+    const { studioId, ownerId, deleted } = req.body || {};
+    if (!studioId || !ownerId) {
+      res.status(400).json({ error: 'studioId and ownerId are required' });
+      return;
+    }
+
+    if (deleted) {
+      await pool.query('DELETE FROM studio_owners WHERE studio_id = $1 AND owner_id = $2', [
+        studioId,
+        ownerId,
+      ]);
+      res.json({ success: true });
+      return;
+    }
+
+    const { email, role, authProvider, displayName, avatarUrl, createdAt } = req.body || {};
+    if (!email || !role) {
+      res.status(400).json({ error: 'email and role are required' });
+      return;
+    }
+
+    const query = `
+      INSERT INTO studio_owners (
+        studio_id, owner_id, email, role, auth_provider, display_name, avatar_url, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, NOW()), NOW())
+      ON CONFLICT (studio_id, owner_id) DO UPDATE SET
+        email = EXCLUDED.email,
+        role = EXCLUDED.role,
+        auth_provider = EXCLUDED.auth_provider,
+        display_name = EXCLUDED.display_name,
+        avatar_url = EXCLUDED.avatar_url,
+        updated_at = NOW()
+    `;
+
+    await pool.query(query, [
+      studioId,
+      ownerId,
+      email,
+      role,
+      authProvider || 'local',
+      displayName || null,
+      avatarUrl || null,
+      createdAt || null,
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Sync studio owner error:', error);
+    res.status(500).json({ error: 'Sync failed' });
+  }
+}
