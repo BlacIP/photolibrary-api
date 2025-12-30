@@ -11,6 +11,12 @@ const cloudinaryConfig = process.env.CLOUDINARY_URL
 
 if (cloudinaryConfig) {
     cloudinary.config(cloudinaryConfig);
+    const cfg = cloudinary.config();
+    console.log('Cloudinary config at startup:', {
+        cloud_name: cfg.cloud_name,
+        api_key: cfg.api_key,
+        secure: cfg.secure ?? true,
+    });
 }
 
 export default cloudinary;
@@ -18,8 +24,9 @@ export default cloudinary;
 // Get environment-specific folder prefix
 export function getCloudinaryFolder(baseFolder: string): string {
     const isDevelopment = process.env.NODE_ENV === 'development';
-    const folderSuffix = isDevelopment ? '-demo' : '';
-    return `${baseFolder}${folderSuffix}`;
+    const root = process.env.CLOUDINARY_ROOT_FOLDER || 'photolibrary';
+    const targetRoot = isDevelopment ? `${root}-demo` : root;
+    return `${targetRoot}/${baseFolder}`;
 }
 
 export async function signUploadRequest(folder: string) {

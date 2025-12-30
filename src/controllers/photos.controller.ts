@@ -3,6 +3,7 @@ import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { signUploadRequest } from '../lib/cloudinary';
 import cloudinary from '../lib/cloudinary';
+import { randomUUID } from 'crypto';
 
 /**
  * @swagger
@@ -56,8 +57,11 @@ export async function getUploadSignature(req: AuthRequest, res: Response): Promi
         }
 
         // Check permissions
-        const canUpload = req.user.role === 'SUPER_ADMIN' ||
-            (req.user.permissions && req.user.permissions.includes('upload_photos'));
+        const perms = req.user.permissions || [];
+        const canUpload =
+            ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) ||
+            perms.includes('upload_photos') ||
+            perms.includes('manage_photos');
 
         if (!canUpload) {
             res.status(403).json({ error: 'Permission denied' });
@@ -79,15 +83,27 @@ export async function getUploadSignature(req: AuthRequest, res: Response): Promi
         }
 
         // Generate upload signature
-        const folder = `photolibrary/${clientId}`;
-        const { timestamp, signature, folder: envFolder } = await signUploadRequest(folder);
+        // Build folder so dev uploads go to photolibrary-demo/{clientId} and prod to photolibrary/{clientId}
+        const { timestamp, signature, folder: envFolder } = await signUploadRequest(clientId);
+        const cfg = cloudinary.config();
+        const cloudName =
+            cfg.cloud_name ||
+            process.env.CLOUDINARY_CLOUD_NAME ||
+            process.env.CLOUDINARY_URL?.split('@')[1];
+        const apiKey =
+            cfg.api_key ||
+            process.env.CLOUDINARY_API_KEY ||
+            process.env.CLOUDINARY_URL?.split(':')[1]?.split('@')[0];
 
         res.json({
             timestamp,
             signature,
             folder: envFolder,
-            cloudName: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_URL?.split('@')[1],
-            apiKey: process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_URL?.split(':')[1]?.split('@')[0],
+            cloudName,
+            apiKey,
+            // Also provide snake_case keys for existing frontend consumption
+            cloud_name: cloudName,
+            api_key: apiKey,
         });
     } catch (error) {
         console.error('Error generating upload signature:', error);
@@ -147,8 +163,8 @@ export async function savePhotoRecord(req: AuthRequest, res: Response): Promise<
 
         // Save to database
         await pool.query(
-            'INSERT INTO photos (client_id, url, filename, public_id, uploaded_by) VALUES ($1, $2, $3, $4, $5)',
-            [clientId, url, filename, publicId, req.user.id]
+            'INSERT INTO photos (id, client_id, url, filename, public_id) VALUES ($1, $2, $3, $4, $5)',
+            [randomUUID(), clientId, url, filename, publicId]
         );
 
         res.json({ success: true });

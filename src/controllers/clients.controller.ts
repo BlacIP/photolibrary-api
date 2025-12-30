@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
+import { randomUUID } from 'crypto';
 
 /**
  * @swagger
@@ -41,6 +42,89 @@ export async function getClients(req: AuthRequest, res: Response): Promise<void>
     } catch (error) {
         console.error('Get clients error:', error);
         res.status(500).json({ error: 'Failed to fetch clients' });
+    }
+}
+
+/**
+ * @swagger
+ * /api/clients:
+ *   post:
+ *     summary: Create a new client
+ *     tags: [Clients]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - event_date
+ *             properties:
+ *               name:
+ *                 type: string
+ *               event_date:
+ *                 type: string
+ *                 format: date
+ *               subheading:
+ *                 type: string
+ *                 nullable: true
+ *     responses:
+ *       201:
+ *         description: Client created
+ *       400:
+ *         description: Missing required fields
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ */
+/**
+ * Create client
+ */
+export async function createClient(req: AuthRequest, res: Response): Promise<void> {
+    try {
+        if (!req.user) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        const permissions = req.user.permissions || [];
+        const canCreate = ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) || permissions.includes('manage_clients');
+        if (!canCreate) {
+            res.status(403).json({ error: 'Forbidden' });
+            return;
+        }
+
+        // Accept both event_date and legacy "date" from older frontend
+        const { name, subheading = null, event_date, date } = req.body;
+        const eventDate = event_date || date;
+
+        if (!name || !eventDate) {
+            res.status(400).json({ error: 'Name and event_date are required' });
+            return;
+        }
+
+        const slug = name.toLowerCase()
+            .replace(/[^\w\s-]/g, '')
+            .trim()
+            .replace(/\s+/g, '-')
+            .replace(/-+/g, '-');
+
+        const id = randomUUID();
+        const insertQuery = `
+          INSERT INTO clients (id, name, slug, subheading, event_date, status)
+          VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+          RETURNING id, name, slug, subheading, event_date, status
+        `;
+
+        const { rows } = await pool.query(insertQuery, [id, name, slug, subheading, eventDate]);
+        res.status(201).json(rows[0]);
+    } catch (error) {
+        console.error('Create client error:', error);
+        res.status(500).json({ error: 'Failed to create client' });
     }
 }
 

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getClients, getClientById, updateClient, deleteClient } from '../controllers/clients.controller';
+import { getClients, getClientById, updateClient, deleteClient, createClient } from '../controllers/clients.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -12,6 +12,7 @@ const router = Router();
  */
 
 router.get('/', authMiddleware, getClients);
+router.post('/', authMiddleware, createClient);
 router.get('/:id', authMiddleware, getClientById);
 router.put('/:id', authMiddleware, updateClient as any);
 router.delete('/:id', authMiddleware, deleteClient as any);
