@@ -78,7 +78,7 @@ export async function login(req: AuthRequest, res: Response): Promise<void> {
         // Set HTTP-only cookie
         // For cross-domain (frontend and backend on different Vercel domains),
         // we need sameSite: 'none' and secure: true
-        res.cookie('token', token, {
+        res.cookie('admin_token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production' || process.env.VERCEL ? true : false,
             sameSite: process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'none' : 'lax',
@@ -118,7 +118,7 @@ export async function login(req: AuthRequest, res: Response): Promise<void> {
  */
 export async function logout(req: AuthRequest, res: Response): Promise<void> {
     // Clear cookie with same settings as when it was set (for cross-domain)
-    res.clearCookie('token', {
+    res.clearCookie('admin_token', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production' || process.env.VERCEL ? true : false,
         sameSite: process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'none' : 'lax',

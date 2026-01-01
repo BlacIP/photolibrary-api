@@ -63,6 +63,21 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+const enableRequestLogging =
+    process.env.REQUEST_LOGS === 'true' || process.env.NODE_ENV !== 'production';
+if (enableRequestLogging) {
+    app.use((req, res, next) => {
+        const start = Date.now();
+        res.on('finish', () => {
+            const ms = Date.now() - start;
+            const user = (req as any).user;
+            const actor = user ? ` user=${user.id} role=${user.role}` : '';
+            console.log(`[${res.statusCode}] ${req.method} ${req.originalUrl} ${ms}ms${actor}`);
+        });
+        next();
+    });
+}
+
 // Serve custom theme switcher script
 app.get('/api-docs/theme.js', (req, res) => {
     res.setHeader('Content-Type', 'application/javascript');

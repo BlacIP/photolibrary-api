@@ -131,6 +131,17 @@ export async function saveLegacyPhotoRecord(req: AuthRequest, res: Response): Pr
   }
 }
 
+export async function saveLegacyPhotoRecords(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    if (!ensureSuperAdminMax(req, res)) return;
+    const data = await callStudioApi('POST', '/api/internal/legacy/photos/save-records', req.body || {});
+    res.json(data);
+  } catch (error) {
+    console.error('Legacy save photo records error:', error);
+    res.status(500).json({ error: 'Failed to save photo records' });
+  }
+}
+
 export async function deleteLegacyPhoto(req: AuthRequest, res: Response): Promise<void> {
   try {
     if (!ensureSuperAdminMax(req, res)) return;

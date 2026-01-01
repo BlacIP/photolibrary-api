@@ -36,7 +36,7 @@ const options: swaggerJsdoc.Options = {
                 cookieAuth: {
                     type: 'apiKey',
                     in: 'cookie',
-                    name: 'token',
+                    name: 'admin_token',
                     description: 'JWT token in HTTP-only cookie',
                 },
             },

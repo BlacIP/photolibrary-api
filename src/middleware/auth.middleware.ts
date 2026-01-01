@@ -13,7 +13,7 @@ export async function authMiddleware(
 ): Promise<void> {
     try {
         // Try to get token from cookie first
-        let token = req.cookies?.token;
+        let token = req.cookies?.admin_token;
 
         // If not in cookie, try Authorization header
         if (!token) {

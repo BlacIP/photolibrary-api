@@ -15,6 +15,7 @@ import {
   getLegacyUploadSignature,
   listLegacyClients,
   saveLegacyPhotoRecord,
+  saveLegacyPhotoRecords,
   updateLegacyClient,
 } from '../controllers/legacy-admin.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
@@ -35,6 +36,7 @@ router.put('/legacy/clients/:id', authMiddleware, updateLegacyClient);
 router.delete('/legacy/clients/:id', authMiddleware, deleteLegacyClient);
 router.post('/legacy/photos/upload-signature', authMiddleware, getLegacyUploadSignature);
 router.post('/legacy/photos/save-record', authMiddleware, saveLegacyPhotoRecord);
+router.post('/legacy/photos/save-records', authMiddleware, saveLegacyPhotoRecords);
 router.delete('/legacy/photos/:id', authMiddleware, deleteLegacyPhoto);
 
 export default router;
