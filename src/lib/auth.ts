@@ -1,8 +1,11 @@
 import { SignJWT, jwtVerify } from 'jose';
 
-const SECRET_KEY = new TextEncoder().encode(
-    process.env.JWT_SECRET || 'fallback-secret-key-change-in-production'
-);
+const rawSecret = process.env.JWT_SECRET;
+if (!rawSecret) {
+    throw new Error('JWT_SECRET is required to start the API.');
+}
+
+const SECRET_KEY = new TextEncoder().encode(rawSecret);
 
 export interface SessionPayload {
     user: {

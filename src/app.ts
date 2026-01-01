@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { swaggerSpec } from './config/swagger';
 import { errorHandler } from './middleware/errorHandler.middleware';
 import clientsRoutes from './routes/clients.routes';
@@ -17,6 +19,44 @@ import galleryRoutes from './routes/gallery.routes';
 
 const app: Application = express();
 
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(
+    helmet({
+        contentSecurityPolicy: false,
+        crossOriginEmbedderPolicy: false,
+    })
+);
+
+const allowVercelPreviews = process.env.ALLOW_VERCEL_PREVIEWS === 'true';
+
+const normalizeOrigin = (value: string) => value.replace(/\/$/, '');
+const toOrigin = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (!/^https?:\/\//.test(trimmed)) {
+        return `https://${trimmed}`;
+    }
+    return trimmed;
+};
+
+const allowedOrigins = new Set<string>();
+const originEnv = process.env.CORS_ALLOWED_ORIGINS || process.env.FRONTEND_URL || '';
+[
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3001',
+    process.env.API_URL,
+    process.env.PRODUCTION_URL,
+    process.env.VERCEL_URL,
+    ...originEnv.split(','),
+]
+    .filter(Boolean)
+    .map((value) => toOrigin(String(value)))
+    .filter(Boolean)
+    .forEach((value) => allowedOrigins.add(normalizeOrigin(value)));
+
 // CORS configuration - support multiple origins
 app.use(cors({
     origin: (origin, callback) => {
@@ -24,31 +64,16 @@ app.use(cors({
         if (!origin) {
             return callback(null, true);
         }
-        
-        // Explicit FRONTEND_URL takes priority
-        if (process.env.FRONTEND_URL) {
-            const allowedUrls = process.env.FRONTEND_URL.split(',').map(url => url.trim());
-            if (allowedUrls.includes(origin)) {
-                return callback(null, true);
-            }
-        }
-        
-        // Allow localhost for development
-        if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+
+        const normalized = normalizeOrigin(origin);
+        if (allowedOrigins.has(normalized)) {
             return callback(null, true);
         }
-        
-        // In production/Vercel, allow Vercel domains
-        if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
-            // Allow any *.vercel.app domain (for preview deployments and production)
-            if (origin.includes('.vercel.app')) {
-                return callback(null, true);
-            }
-            
-            // Also allow explicit production frontend URL if set
-            // You can set FRONTEND_URL in Vercel dashboard: https://photolibrary.vercel.app
+
+        if (allowVercelPreviews && normalized.endsWith('.vercel.app')) {
+            return callback(null, true);
         }
-        
+
         // Default: allow in development, block in production
         if (process.env.NODE_ENV === 'production') {
             console.warn(`CORS: Blocked origin ${origin}`);
@@ -62,6 +87,58 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 1000,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+});
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+});
+
+app.use('/api', generalLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+
+app.use((req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+        return next();
+    }
+
+    if (req.headers['x-admin-sync-secret']) {
+        return next();
+    }
+
+    let origin = req.headers.origin as string | undefined;
+    if (!origin && req.headers.referer) {
+        try {
+            origin = new URL(req.headers.referer).origin;
+        } catch {
+            origin = undefined;
+        }
+    }
+
+    if (!origin) {
+        return next();
+    }
+
+    const normalized = normalizeOrigin(origin);
+    if (allowedOrigins.has(normalized)) {
+        return next();
+    }
+
+    if (allowVercelPreviews && normalized.endsWith('.vercel.app')) {
+        return next();
+    }
+
+    res.status(403).json({ error: 'Forbidden - CSRF protection' });
+});
 
 const enableRequestLogging =
     process.env.REQUEST_LOGS === 'true' || process.env.NODE_ENV !== 'production';
@@ -78,10 +155,13 @@ if (enableRequestLogging) {
     });
 }
 
+const enableSwagger = process.env.ENABLE_SWAGGER === 'true' || process.env.NODE_ENV !== 'production';
+
 // Serve custom theme switcher script
-app.get('/api-docs/theme.js', (req, res) => {
-    res.setHeader('Content-Type', 'application/javascript');
-    res.send(`
+if (enableSwagger) {
+    app.get('/api-docs/theme.js', (req, res) => {
+        res.setHeader('Content-Type', 'application/javascript');
+        res.send(`
         window.addEventListener('load', function() {
             const btn = document.createElement('button');
             btn.innerHTML = '🌙';
@@ -111,7 +191,8 @@ app.get('/api-docs/theme.js', (req, res) => {
             updateTheme();
         });
     `);
-});
+    });
+}
 
 // Swagger documentation
 const swaggerUiOptions = {
@@ -149,7 +230,9 @@ const swaggerUiOptions = {
     }
 };
 
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, swaggerUiOptions));
+if (enableSwagger) {
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, swaggerUiOptions));
+}
 
 // API routes
 app.use('/api', authRoutes);
@@ -209,11 +292,13 @@ function getDynamicSwaggerSpec(req: express.Request) {
 }
 
 // Swagger JSON endpoint
-app.get('/api-docs.json', (req, res) => {
-    res.setHeader('Content-Type', 'application/json');
-    const dynamicSpec = getDynamicSwaggerSpec(req);
-    res.send(dynamicSpec);
-});
+if (enableSwagger) {
+    app.get('/api-docs.json', (req, res) => {
+        res.setHeader('Content-Type', 'application/json');
+        const dynamicSpec = getDynamicSwaggerSpec(req);
+        res.send(dynamicSpec);
+    });
+}
 
 // Error handler (must be last)
 app.use(errorHandler);

@@ -7,3 +7,4 @@ dist/
 # env files (can opt-in for commiting if needed)
 .env
 .env*.local
+.env.example
