@@ -1,15 +1,16 @@
 import { Request, Response } from 'express';
 import { pool } from '../lib/db';
+import { asyncHandler } from '../middleware/async-handler';
+import { AppError } from '../lib/errors';
+import { success } from '../lib/http';
 
-export async function syncStudio(req: Request, res: Response): Promise<void> {
-  try {
-    const { id, name, slug, status, plan, created_at } = req.body || {};
-    if (!id || !name || !slug) {
-      res.status(400).json({ error: 'id, name, and slug are required' });
-      return;
-    }
+export const syncStudio = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { id, name, slug, status, plan, created_at } = req.body || {};
+  if (!id || !name || !slug) {
+    throw new AppError('id, name, and slug are required', 400);
+  }
 
-    const query = `
+  const query = `
       INSERT INTO studios (id, name, slug, status, plan, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()), NOW())
       ON CONFLICT (id) DO UPDATE SET
@@ -19,36 +20,29 @@ export async function syncStudio(req: Request, res: Response): Promise<void> {
         plan = EXCLUDED.plan,
         updated_at = NOW()
     `;
-    await pool.query(query, [id, name, slug, status || 'ONBOARDING', plan || 'free', created_at || null]);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Sync studio error:', error);
-    res.status(500).json({ error: 'Sync failed' });
+  await pool.query(query, [id, name, slug, status || 'ONBOARDING', plan || 'free', created_at || null]);
+  success(res, { success: true });
+});
+
+export const syncClient = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { studioId, clientId, deleted } = req.body || {};
+  if (!studioId || !clientId) {
+    throw new AppError('studioId and clientId are required', 400);
   }
-}
 
-export async function syncClient(req: Request, res: Response): Promise<void> {
-  try {
-    const { studioId, clientId, deleted } = req.body || {};
-    if (!studioId || !clientId) {
-      res.status(400).json({ error: 'studioId and clientId are required' });
-      return;
-    }
+  if (deleted) {
+    await pool.query('DELETE FROM studio_client_stats WHERE studio_id = $1 AND client_id = $2', [studioId, clientId]);
+    await pool.query('DELETE FROM studio_clients WHERE studio_id = $1 AND client_id = $2', [studioId, clientId]);
+    success(res, { success: true });
+    return;
+  }
 
-    if (deleted) {
-      await pool.query('DELETE FROM studio_client_stats WHERE studio_id = $1 AND client_id = $2', [studioId, clientId]);
-      await pool.query('DELETE FROM studio_clients WHERE studio_id = $1 AND client_id = $2', [studioId, clientId]);
-      res.json({ success: true });
-      return;
-    }
+  const { name, slug, subheading, event_date, status, created_at } = req.body || {};
+  if (!name || !slug || !event_date) {
+    throw new AppError('name, slug, and event_date are required', 400);
+  }
 
-    const { name, slug, subheading, event_date, status, created_at } = req.body || {};
-    if (!name || !slug || !event_date) {
-      res.status(400).json({ error: 'name, slug, and event_date are required' });
-      return;
-    }
-
-    const query = `
+  const query = `
       INSERT INTO studio_clients (studio_id, client_id, name, slug, subheading, event_date, status, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, NOW()), NOW())
       ON CONFLICT (studio_id, client_id) DO UPDATE SET
@@ -59,34 +53,28 @@ export async function syncClient(req: Request, res: Response): Promise<void> {
         status = EXCLUDED.status,
         updated_at = NOW()
     `;
-    await pool.query(query, [
-      studioId,
-      clientId,
-      name,
-      slug,
-      subheading || null,
-      event_date,
-      status || 'ACTIVE',
-      created_at || null,
-    ]);
+  await pool.query(query, [
+    studioId,
+    clientId,
+    name,
+    slug,
+    subheading || null,
+    event_date,
+    status || 'ACTIVE',
+    created_at || null,
+  ]);
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Sync client error:', error);
-    res.status(500).json({ error: 'Sync failed' });
+  success(res, { success: true });
+});
+
+export const syncClientStats = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { studioId, clientId, deltaCount, deltaBytes, photoCount, storageBytes } = req.body || {};
+  if (!studioId || !clientId) {
+    throw new AppError('studioId and clientId are required', 400);
   }
-}
 
-export async function syncClientStats(req: Request, res: Response): Promise<void> {
-  try {
-    const { studioId, clientId, deltaCount, deltaBytes, photoCount, storageBytes } = req.body || {};
-    if (!studioId || !clientId) {
-      res.status(400).json({ error: 'studioId and clientId are required' });
-      return;
-    }
-
-    if (photoCount !== undefined || storageBytes !== undefined) {
-      const query = `
+  if (photoCount !== undefined || storageBytes !== undefined) {
+    const query = `
         INSERT INTO studio_client_stats (studio_id, client_id, photo_count, storage_bytes, updated_at)
         VALUES ($1, $2, COALESCE($3, 0), COALESCE($4, 0), NOW())
         ON CONFLICT (studio_id, client_id) DO UPDATE SET
@@ -94,15 +82,15 @@ export async function syncClientStats(req: Request, res: Response): Promise<void
           storage_bytes = COALESCE($4, studio_client_stats.storage_bytes),
           updated_at = NOW()
       `;
-      await pool.query(query, [studioId, clientId, photoCount ?? null, storageBytes ?? null]);
-      res.json({ success: true });
-      return;
-    }
+    await pool.query(query, [studioId, clientId, photoCount ?? null, storageBytes ?? null]);
+    success(res, { success: true });
+    return;
+  }
 
-    const countDelta = Number(deltaCount || 0);
-    const bytesDelta = Number(deltaBytes || 0);
+  const countDelta = Number(deltaCount || 0);
+  const bytesDelta = Number(deltaBytes || 0);
 
-    const query = `
+  const query = `
       INSERT INTO studio_client_stats (studio_id, client_id, photo_count, storage_bytes, updated_at)
       VALUES ($1, $2, GREATEST($3, 0), GREATEST($4, 0), NOW())
       ON CONFLICT (studio_id, client_id) DO UPDATE SET
@@ -110,39 +98,32 @@ export async function syncClientStats(req: Request, res: Response): Promise<void
         storage_bytes = GREATEST(studio_client_stats.storage_bytes + $4, 0),
         updated_at = NOW()
     `;
-    await pool.query(query, [studioId, clientId, countDelta, bytesDelta]);
+  await pool.query(query, [studioId, clientId, countDelta, bytesDelta]);
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Sync client stats error:', error);
-    res.status(500).json({ error: 'Sync failed' });
+  success(res, { success: true });
+});
+
+export const syncStudioOwner = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { studioId, ownerId, deleted } = req.body || {};
+  if (!studioId || !ownerId) {
+    throw new AppError('studioId and ownerId are required', 400);
   }
-}
 
-export async function syncStudioOwner(req: Request, res: Response): Promise<void> {
-  try {
-    const { studioId, ownerId, deleted } = req.body || {};
-    if (!studioId || !ownerId) {
-      res.status(400).json({ error: 'studioId and ownerId are required' });
-      return;
-    }
+  if (deleted) {
+    await pool.query('DELETE FROM studio_owners WHERE studio_id = $1 AND owner_id = $2', [
+      studioId,
+      ownerId,
+    ]);
+    success(res, { success: true });
+    return;
+  }
 
-    if (deleted) {
-      await pool.query('DELETE FROM studio_owners WHERE studio_id = $1 AND owner_id = $2', [
-        studioId,
-        ownerId,
-      ]);
-      res.json({ success: true });
-      return;
-    }
+  const { email, role, authProvider, displayName, avatarUrl, createdAt } = req.body || {};
+  if (!email || !role) {
+    throw new AppError('email and role are required', 400);
+  }
 
-    const { email, role, authProvider, displayName, avatarUrl, createdAt } = req.body || {};
-    if (!email || !role) {
-      res.status(400).json({ error: 'email and role are required' });
-      return;
-    }
-
-    const query = `
+  const query = `
       INSERT INTO studio_owners (
         studio_id, owner_id, email, role, auth_provider, display_name, avatar_url, created_at, updated_at
       )
@@ -156,20 +137,16 @@ export async function syncStudioOwner(req: Request, res: Response): Promise<void
         updated_at = NOW()
     `;
 
-    await pool.query(query, [
-      studioId,
-      ownerId,
-      email,
-      role,
-      authProvider || 'local',
-      displayName || null,
-      avatarUrl || null,
-      createdAt || null,
-    ]);
+  await pool.query(query, [
+    studioId,
+    ownerId,
+    email,
+    role,
+    authProvider || 'local',
+    displayName || null,
+    avatarUrl || null,
+    createdAt || null,
+  ]);
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Sync studio owner error:', error);
-    res.status(500).json({ error: 'Sync failed' });
-  }
-}
+  success(res, { success: true });
+});

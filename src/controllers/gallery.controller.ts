@@ -2,6 +2,9 @@ import { Response, Request } from 'express';
 import { pool } from '../lib/db';
 import archiver from 'archiver';
 import https from 'https';
+import { asyncHandler } from '../middleware/async-handler';
+import { AppError } from '../lib/errors';
+import { success } from '../lib/http';
 
 type StudioGallery = {
     id?: string;
@@ -98,52 +101,46 @@ async function callStudioApi(path: string) {
  *       404:
  *         description: Gallery not found
  */
-export async function getGallery(req: Request, res: Response): Promise<void> {
+export const getGallery = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const { slug } = req.params;
+
+    // Try studio-api legacy gallery first.
     try {
-        const { slug } = req.params;
-
-        // Try studio-api legacy gallery first.
-        try {
-            const studioGallery = (await callStudioApi(`/api/internal/legacy/gallery/${slug}`)) as StudioGallery | null;
-            if (studioGallery) {
-                res.json(studioGallery);
-                return;
-            }
-        } catch (error) {
-            console.warn('Studio gallery lookup failed, falling back to legacy DB', error);
-        }
-
-        // Legacy DB fallback
-        const clientResult = await pool.query('SELECT * FROM clients WHERE slug = $1', [slug]);
-
-        if (clientResult.rows.length === 0) {
-            res.status(404).json({ error: 'Client not found' });
+        const studioGallery = (await callStudioApi(`/api/internal/legacy/gallery/${slug}`)) as StudioGallery | null;
+        if (studioGallery) {
+            success(res, studioGallery);
             return;
         }
-
-        const client = clientResult.rows[0];
-
-        const photosResult = await pool.query(
-            'SELECT id, url, filename, public_id, created_at FROM photos WHERE client_id = $1 ORDER BY created_at DESC',
-            [client.id]
-        );
-
-        res.json({
-            id: client.id,
-            name: client.name,
-            slug: client.slug,
-            event_date: client.event_date,
-            subheading: client.subheading,
-            status: client.status || 'ACTIVE',
-            header_media_url: client.header_media_url,
-            header_media_type: client.header_media_type,
-            photos: photosResult.rows,
-        });
     } catch (error) {
-        console.error('Error fetching gallery:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        console.warn('Studio gallery lookup failed, falling back to legacy DB', error);
     }
-}
+
+    // Legacy DB fallback
+    const clientResult = await pool.query('SELECT * FROM clients WHERE slug = $1', [slug]);
+
+    if (clientResult.rows.length === 0) {
+        throw new AppError('Client not found', 404);
+    }
+
+    const client = clientResult.rows[0];
+
+    const photosResult = await pool.query(
+        'SELECT id, url, filename, public_id, created_at FROM photos WHERE client_id = $1 ORDER BY created_at DESC',
+        [client.id]
+    );
+
+    success(res, {
+        id: client.id,
+        name: client.name,
+        slug: client.slug,
+        event_date: client.event_date,
+        subheading: client.subheading,
+        status: client.status || 'ACTIVE',
+        header_media_url: client.header_media_url,
+        header_media_type: client.header_media_type,
+        photos: photosResult.rows,
+    });
+});
 
 /**
  * @swagger
@@ -152,85 +149,81 @@ export async function getGallery(req: Request, res: Response): Promise<void> {
  *     summary: Download zip of gallery
  *     tags: [Gallery]
  */
-export async function downloadGallery(req: Request, res: Response): Promise<void> {
+export const downloadGallery = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const { slug } = req.params;
+
+    // Try studio-api legacy gallery first.
+    let client = null;
+    let photos: any[] = [];
     try {
-        const { slug } = req.params;
+        const studioGallery = (await callStudioApi(`/api/internal/legacy/gallery/${slug}`)) as StudioGallery | null;
+        if (studioGallery) {
+            client = studioGallery;
+            photos = Array.isArray(studioGallery.photos) ? studioGallery.photos : [];
+        }
+    } catch (error) {
+        console.warn('Studio gallery lookup failed, falling back to legacy DB', error);
+    }
 
-        // Try studio-api legacy gallery first.
-        let client = null;
-        let photos: any[] = [];
+    if (!client) {
+        const clientRes = await pool.query('SELECT * FROM clients WHERE slug = $1', [slug]);
+        if (clientRes.rows.length === 0) {
+            throw new AppError('Gallery not found', 404);
+        }
+        client = clientRes.rows[0];
+        const photosRes = await pool.query('SELECT * FROM photos WHERE client_id = $1', [client.id]);
+        photos = photosRes.rows;
+    }
+
+    if (!photos.length) {
+        throw new AppError('No photos to download', 400);
+    }
+
+    const archive = archiver('zip', {
+        zlib: { level: 9 }
+    });
+
+    const filename = `${client.name.replace(/[^a-z0-9]/gi, '_')}_Gallery.zip`;
+    res.attachment(filename);
+
+    archive.pipe(res);
+
+    for (const photo of photos) {
+        if (!photo.url) continue;
+
         try {
-            const studioGallery = (await callStudioApi(`/api/internal/legacy/gallery/${slug}`)) as StudioGallery | null;
-            if (studioGallery) {
-                client = studioGallery;
-                photos = Array.isArray(studioGallery.photos) ? studioGallery.photos : [];
-            }
-        } catch (error) {
-            console.warn('Studio gallery lookup failed, falling back to legacy DB', error);
-        }
-
-        if (!client) {
-            const clientRes = await pool.query('SELECT * FROM clients WHERE slug = $1', [slug]);
-            if (clientRes.rows.length === 0) {
-                res.status(404).json({ error: 'Gallery not found' });
-                return;
-            }
-            client = clientRes.rows[0];
-            const photosRes = await pool.query('SELECT * FROM photos WHERE client_id = $1', [client.id]);
-            photos = photosRes.rows;
-        }
-
-        if (!photos.length) {
-            res.status(400).json({ error: 'No photos to download' });
-            return;
-        }
-
-        const archive = archiver('zip', {
-            zlib: { level: 9 }
-        });
-
-        const filename = `${client.name.replace(/[^a-z0-9]/gi, '_')}_Gallery.zip`;
-        res.attachment(filename);
-
-        archive.pipe(res);
-
-        for (const photo of photos) {
-            if (!photo.url) continue;
-
-            try {
-                await new Promise<void>((resolve, reject) => {
-                    fetchImageStream(photo.url)
-                        .then((stream) => {
-                            if (stream) {
-                                archive.append(stream, { name: photo.filename || `photo_${photo.id}.jpg` });
-                                stream.on('end', () => resolve());
-                                stream.on('error', (err: any) => {
-                                    console.error(`Stream error for ${photo.url}:`, err);
-                                    resolve();
-                                });
-                            } else {
-                                console.error(`Failed to fetch image: ${photo.url}`);
+            await new Promise<void>((resolve, reject) => {
+                fetchImageStream(photo.url)
+                    .then((stream) => {
+                        if (stream) {
+                            archive.append(stream, { name: photo.filename || `photo_${photo.id}.jpg` });
+                            stream.on('end', () => resolve());
+                            stream.on('error', (err: any) => {
+                                console.error(`Stream error for ${photo.url}:`, err);
                                 resolve();
-                            }
-                        })
-                        .catch((err) => {
-                            console.error(`Fetch error for ${photo.url}:`, err);
+                            });
+                        } else {
+                            console.error(`Failed to fetch image: ${photo.url}`);
                             resolve();
-                        });
-                });
+                        }
+                    })
+                    .catch((err) => {
+                        console.error(`Fetch error for ${photo.url}:`, err);
+                        resolve();
+                    });
+            });
 
-            } catch (err) {
-                console.error(`Processing error for photo ${photo.id}:`, err);
-            }
+        } catch (err) {
+            console.error(`Processing error for photo ${photo.id}:`, err);
         }
+    }
 
+    try {
         await archive.finalize();
-
     } catch (error) {
         console.error('Download gallery error:', error);
-        if (!res.headersSent) res.status(500).json({ error: 'Download failed' });
     }
-}
+});
 
 // Helper to fetch image stream with redirect handling and retry logic
 function fetchImageStream(url: string, attempt = 1): Promise<any> {

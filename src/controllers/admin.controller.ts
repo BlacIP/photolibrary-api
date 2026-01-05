@@ -2,6 +2,9 @@ import { Response } from 'express';
 import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import cloudinary from '../lib/cloudinary';
+import { asyncHandler } from '../middleware/async-handler';
+import { AppError } from '../lib/errors';
+import { success } from '../lib/http';
 
 async function getStatusTimestampColumn(): Promise<'status_updated_at' | 'created_at'> {
     const res = await pool.query(
@@ -19,99 +22,92 @@ async function getStatusTimestampColumn(): Promise<'status_updated_at' | 'create
  *     security:
  *       - cookieAuth: []
  */
-export async function getStorageStats(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
+export const getStorageStats = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
+        throw new AppError('Forbidden', 403);
+    }
 
-        // Detect if photos.size column exists to avoid failing on missing column
-        const sizeColumnRes = await pool.query(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'photos' AND column_name = 'size') AS \"exists\""
-        );
-        const hasSizeColumn = Boolean(sizeColumnRes.rows[0]?.exists);
+    // Detect if photos.size column exists to avoid failing on missing column
+    const sizeColumnRes = await pool.query(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'photos' AND column_name = 'size') AS \"exists\""
+    );
+    const hasSizeColumn = Boolean(sizeColumnRes.rows[0]?.exists);
 
-        const statusTimestampColumn = await getStatusTimestampColumn();
+    const statusTimestampColumn = await getStatusTimestampColumn();
 
-        // 1. Database Stats (counts + optional bytes)
-        const photosCountRes = await pool.query(
-            hasSizeColumn
-                ? 'SELECT COUNT(*) as count, COALESCE(SUM(size), 0) as size FROM photos'
-                : 'SELECT COUNT(*) as count FROM photos'
-        );
-        const totalPhotos = parseInt(photosCountRes.rows[0].count || '0', 10);
-        const dbTotalBytes = hasSizeColumn
-            ? parseInt(photosCountRes.rows[0].size || '0', 10)
-            : 0;
+    // 1. Database Stats (counts + optional bytes)
+    const photosCountRes = await pool.query(
+        hasSizeColumn
+            ? 'SELECT COUNT(*) as count, COALESCE(SUM(size), 0) as size FROM photos'
+            : 'SELECT COUNT(*) as count FROM photos'
+    );
+    const totalPhotos = parseInt(photosCountRes.rows[0].count || '0', 10);
+    const dbTotalBytes = hasSizeColumn
+        ? parseInt(photosCountRes.rows[0].size || '0', 10)
+        : 0;
 
-        // 2. Client Stats (Archived/Deleted breakdown + per-client totals)
-        const clientsRes = await pool.query(
+    // 2. Client Stats (Archived/Deleted breakdown + per-client totals)
+    const clientsRes = await pool.query(
+        `
+        SELECT 
+            c.id, 
+            c.name, 
+            c.status, 
+            COALESCE(c.${statusTimestampColumn}, c.created_at) as "statusUpdatedAt",
+            COUNT(p.id) as photo_count
+            ${hasSizeColumn ? ', COALESCE(SUM(p.size), 0) as total_bytes' : ', 0::bigint as total_bytes'}
+        FROM clients c
+        LEFT JOIN photos p ON c.id = p.client_id
+        GROUP BY c.id
+        ORDER BY c.created_at DESC
+    `
+    );
+    const clients = clientsRes.rows;
+
+    // Aggregate archived/deleted bytes if size column exists
+    let statusStats = {
+        archived_bytes: 0,
+        deleted_bytes: 0,
+    };
+
+    if (hasSizeColumn) {
+        const statusAggRes = await pool.query(
             `
-            SELECT 
-                c.id, 
-                c.name, 
-                c.status, 
-                COALESCE(c.${statusTimestampColumn}, c.created_at) as "statusUpdatedAt",
-                COUNT(p.id) as photo_count
-                ${hasSizeColumn ? ', COALESCE(SUM(p.size), 0) as total_bytes' : ', 0::bigint as total_bytes'}
+            SELECT c.status, COALESCE(SUM(p.size), 0) as bytes
             FROM clients c
-            LEFT JOIN photos p ON c.id = p.client_id
-            GROUP BY c.id
-            ORDER BY c.created_at DESC
+            LEFT JOIN photos p ON p.client_id = c.id
+            GROUP BY c.status
         `
         );
-        const clients = clientsRes.rows;
 
-        // Aggregate archived/deleted bytes if size column exists
-        let statusStats = {
-            archived_bytes: 0,
-            deleted_bytes: 0,
-        };
-
-        if (hasSizeColumn) {
-            const statusAggRes = await pool.query(
-                `
-                SELECT c.status, COALESCE(SUM(p.size), 0) as bytes
-                FROM clients c
-                LEFT JOIN photos p ON p.client_id = c.id
-                GROUP BY c.status
-            `
-            );
-
-            statusAggRes.rows.forEach((row) => {
-                if (row.status === 'ARCHIVED') {
-                    statusStats.archived_bytes = parseInt(row.bytes || '0', 10);
-                }
-                if (row.status === 'DELETED' || row.status === 'DELETED_FOREVER') {
-                    statusStats.deleted_bytes += parseInt(row.bytes || '0', 10);
-                }
-            });
-        }
-
-        // 3. Cloudinary Stats
-        let cloudinaryStats = null;
-        try {
-            const usage = await cloudinary.api.usage();
-            cloudinaryStats = usage;
-        } catch (e: any) {
-            console.error('Cloudinary usage error:', e);
-            cloudinaryStats = { error: e.message };
-        }
-
-        res.json({
-            totalPhotos,
-            totalBytes: dbTotalBytes, // unlikely to be accurate without column
-            statusStats,
-            clients,
-            cloudinary: cloudinaryStats
+        statusAggRes.rows.forEach((row) => {
+            if (row.status === 'ARCHIVED') {
+                statusStats.archived_bytes = parseInt(row.bytes || '0', 10);
+            }
+            if (row.status === 'DELETED' || row.status === 'DELETED_FOREVER') {
+                statusStats.deleted_bytes += parseInt(row.bytes || '0', 10);
+            }
         });
-
-    } catch (error) {
-        console.error('Storage stats error:', error);
-        res.status(500).json({ error: 'Failed to fetch storage stats' });
     }
-}
+
+    // 3. Cloudinary Stats
+    let cloudinaryStats = null;
+    try {
+        const usage = await cloudinary.api.usage();
+        cloudinaryStats = usage;
+    } catch (e: any) {
+        console.error('Cloudinary usage error:', e);
+        cloudinaryStats = { error: e.message };
+    }
+
+    success(res, {
+        totalPhotos,
+        totalBytes: dbTotalBytes, // unlikely to be accurate without column
+        statusStats,
+        clients,
+        cloudinary: cloudinaryStats
+    });
+});
 
 /**
  * @swagger
@@ -122,14 +118,12 @@ export async function getStorageStats(req: AuthRequest, res: Response): Promise<
  *     security:
  *       - cookieAuth: []
  */
-export async function runCleanup(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
+export const runCleanup = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
+        throw new AppError('Forbidden', 403);
+    }
 
-        const statusTimestampColumn = await getStatusTimestampColumn();
+    const statusTimestampColumn = await getStatusTimestampColumn();
 
         // Logic:
         // 1. Recycle Bin (DELETED) > 7 days -> DELETED_FOREVER
@@ -187,14 +181,9 @@ export async function runCleanup(req: AuthRequest, res: Response): Promise<void>
             await pool.query('DELETE FROM clients WHERE id = $1', [row.id]);
         }
 
-        res.json({
-            success: true,
-            archivedMoved: toRecycle.rowCount,
-            permanentlyDeleted: toDelete.rowCount
-        });
-
-    } catch (error) {
-        console.error('Cleanup error:', error);
-        res.status(500).json({ error: 'Cleanup failed' });
-    }
-}
+    success(res, {
+        success: true,
+        archivedMoved: toRecycle.rowCount,
+        permanentlyDeleted: toDelete.rowCount
+    });
+});

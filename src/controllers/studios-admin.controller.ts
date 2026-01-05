@@ -1,6 +1,9 @@
 import { Response } from 'express';
 import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
+import { asyncHandler } from '../middleware/async-handler';
+import { AppError } from '../lib/errors';
+import { success } from '../lib/http';
 
 function getStudioApiConfig() {
   const baseUrl = process.env.STUDIO_API_URL || 'http://localhost:4000';
@@ -12,7 +15,7 @@ function getStudioApiConfig() {
 async function callStudioApi(path: string, payload: unknown) {
   const cfg = getStudioApiConfig();
   if (!cfg) {
-    throw new Error('Studio API config missing');
+    throw new AppError('Studio API config missing', 500);
   }
 
   const trimmedPath = path.startsWith('/') ? path.slice(1) : path;
@@ -30,18 +33,16 @@ async function callStudioApi(path: string, payload: unknown) {
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Studio API error (${res.status}): ${body}`);
+    throw new AppError(`Studio API error (${res.status}): ${body}`, 500);
   }
 
   return res.json();
 }
 
-function ensureSuperAdmin(req: AuthRequest, res: Response): boolean {
+function assertSuperAdmin(req: AuthRequest) {
   if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
-    res.status(403).json({ error: 'Forbidden' });
-    return false;
+    throw new AppError('Forbidden', 403);
   }
-  return true;
 }
 
 /**
@@ -53,10 +54,9 @@ function ensureSuperAdmin(req: AuthRequest, res: Response): boolean {
  *     security:
  *       - cookieAuth: []
  */
-export async function listStudios(req: AuthRequest, res: Response): Promise<void> {
-  try {
-    if (!ensureSuperAdmin(req, res)) return;
-    const query = `
+export const listStudios = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+  assertSuperAdmin(req);
+  const query = `
       SELECT
         s.id,
         s.name,
@@ -75,13 +75,9 @@ export async function listStudios(req: AuthRequest, res: Response): Promise<void
       ORDER BY s.created_at DESC
     `;
 
-    const { rows } = await pool.query(query);
-    res.json(rows);
-  } catch (error) {
-    console.error('List studios error:', error);
-    res.status(500).json({ error: 'Failed to list studios' });
-  }
-}
+  const { rows } = await pool.query(query);
+  success(res, rows);
+});
 
 /**
  * @swagger
@@ -98,23 +94,21 @@ export async function listStudios(req: AuthRequest, res: Response): Promise<void
  *         schema:
  *           type: string
  */
-export async function getStudio(req: AuthRequest, res: Response): Promise<void> {
-  try {
-    if (!ensureSuperAdmin(req, res)) return;
-    const { studioId } = req.params;
-    const studioRes = await pool.query(
-      `SELECT id, name, slug, status, plan, created_at
-       FROM studios WHERE id = $1`,
-      [studioId]
-    );
+export const getStudio = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+  assertSuperAdmin(req);
+  const { studioId } = req.params;
+  const studioRes = await pool.query(
+    `SELECT id, name, slug, status, plan, created_at
+     FROM studios WHERE id = $1`,
+    [studioId]
+  );
 
-    if (studioRes.rows.length === 0) {
-      res.status(404).json({ error: 'Studio not found' });
-      return;
-    }
+  if (studioRes.rows.length === 0) {
+    throw new AppError('Studio not found', 404);
+  }
 
-    const statsRes = await pool.query(
-      `SELECT
+  const statsRes = await pool.query(
+    `SELECT
          COALESCE(SUM(stats.photo_count), 0) AS photo_count,
          COALESCE(SUM(stats.storage_bytes), 0) AS storage_bytes,
          COUNT(DISTINCT sc.client_id) AS client_count
@@ -122,27 +116,23 @@ export async function getStudio(req: AuthRequest, res: Response): Promise<void> 
        LEFT JOIN studio_client_stats stats
          ON stats.studio_id = sc.studio_id AND stats.client_id = sc.client_id
        WHERE sc.studio_id = $1`,
-      [studioId]
-    );
+    [studioId]
+  );
 
-    const ownersRes = await pool.query(
-      `SELECT owner_id AS id, email, role, auth_provider, display_name, avatar_url, created_at
+  const ownersRes = await pool.query(
+    `SELECT owner_id AS id, email, role, auth_provider, display_name, avatar_url, created_at
        FROM studio_owners
        WHERE studio_id = $1
        ORDER BY created_at ASC`,
-      [studioId]
-    );
+    [studioId]
+  );
 
-    res.json({
-      studio: studioRes.rows[0],
-      stats: statsRes.rows[0] || { photo_count: 0, storage_bytes: 0, client_count: 0 },
-      owners: ownersRes.rows,
-    });
-  } catch (error) {
-    console.error('Get studio error:', error);
-    res.status(500).json({ error: 'Failed to fetch studio' });
-  }
-}
+  success(res, {
+    studio: studioRes.rows[0],
+    stats: statsRes.rows[0] || { photo_count: 0, storage_bytes: 0, client_count: 0 },
+    owners: ownersRes.rows,
+  });
+});
 
 /**
  * @swagger
@@ -159,11 +149,10 @@ export async function getStudio(req: AuthRequest, res: Response): Promise<void> 
  *         schema:
  *           type: string
  */
-export async function listStudioClients(req: AuthRequest, res: Response): Promise<void> {
-  try {
-    if (!ensureSuperAdmin(req, res)) return;
-    const { studioId } = req.params;
-    const query = `
+export const listStudioClients = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+  assertSuperAdmin(req);
+  const { studioId } = req.params;
+  const query = `
       SELECT
         sc.client_id,
         sc.name,
@@ -181,13 +170,9 @@ export async function listStudioClients(req: AuthRequest, res: Response): Promis
       ORDER BY sc.created_at DESC
     `;
 
-    const { rows } = await pool.query(query, [studioId]);
-    res.json(rows);
-  } catch (error) {
-    console.error('List studio clients error:', error);
-    res.status(500).json({ error: 'Failed to list studio clients' });
-  }
-}
+  const { rows } = await pool.query(query, [studioId]);
+  success(res, rows);
+});
 
 /**
  * @swagger
@@ -209,11 +194,10 @@ export async function listStudioClients(req: AuthRequest, res: Response): Promis
  *         schema:
  *           type: string
  */
-export async function getStudioClient(req: AuthRequest, res: Response): Promise<void> {
-  try {
-    if (!ensureSuperAdmin(req, res)) return;
-    const { studioId, clientId } = req.params;
-    const query = `
+export const getStudioClient = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+  assertSuperAdmin(req);
+  const { studioId, clientId } = req.params;
+  const query = `
       SELECT
         sc.client_id,
         sc.name,
@@ -230,36 +214,25 @@ export async function getStudioClient(req: AuthRequest, res: Response): Promise<
       WHERE sc.studio_id = $1 AND sc.client_id = $2
     `;
 
-    const { rows } = await pool.query(query, [studioId, clientId]);
-    if (rows.length === 0) {
-      res.status(404).json({ error: 'Client not found' });
-      return;
-    }
-
-    res.json(rows[0]);
-  } catch (error) {
-    console.error('Get studio client error:', error);
-    res.status(500).json({ error: 'Failed to fetch client' });
+  const { rows } = await pool.query(query, [studioId, clientId]);
+  if (rows.length === 0) {
+    throw new AppError('Client not found', 404);
   }
-}
 
-export async function updateStudioStatus(req: AuthRequest, res: Response): Promise<void> {
-  try {
-    if (!ensureSuperAdmin(req, res)) return;
-    const { studioId } = req.params;
-    const { status } = req.body || {};
-    if (!status) {
-      res.status(400).json({ error: 'status is required' });
-      return;
-    }
+  success(res, rows[0]);
+});
 
-    const response = await callStudioApi(`/api/internal/studios/${studioId}/status`, { status });
-    res.json(response);
-  } catch (error: any) {
-    console.error('Update studio status error:', error);
-    res.status(500).json({ error: error?.message || 'Failed to update studio status' });
+export const updateStudioStatus = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+  assertSuperAdmin(req);
+  const { studioId } = req.params;
+  const { status } = req.body || {};
+  if (!status) {
+    throw new AppError('status is required', 400);
   }
-}
+
+  const response = await callStudioApi(`/api/internal/studios/${studioId}/status`, { status });
+  success(res, response);
+});
 
 /**
  * @swagger

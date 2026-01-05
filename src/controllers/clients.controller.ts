@@ -2,6 +2,9 @@ import { Response } from 'express';
 import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { randomUUID } from 'crypto';
+import { asyncHandler } from '../middleware/async-handler';
+import { AppError } from '../lib/errors';
+import { success } from '../lib/http';
 
 /**
  * @swagger
@@ -28,22 +31,17 @@ import { randomUUID } from 'crypto';
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-export async function getClients(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        const { rows } = await pool.query(
-            `SELECT c.*, COUNT(p.id) as photo_count 
-             FROM clients c
-             LEFT JOIN photos p ON c.id = p.client_id
-             GROUP BY c.id
-             ORDER BY c.created_at DESC`
-        );
+export const getClients = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    const { rows } = await pool.query(
+        `SELECT c.*, COUNT(p.id) as photo_count 
+         FROM clients c
+         LEFT JOIN photos p ON c.id = p.client_id
+         GROUP BY c.id
+         ORDER BY c.created_at DESC`
+    );
 
-        res.json(rows);
-    } catch (error) {
-        console.error('Get clients error:', error);
-        res.status(500).json({ error: 'Failed to fetch clients' });
-    }
-}
+    success(res, rows);
+});
 
 /**
  * @swagger
@@ -84,49 +82,41 @@ export async function getClients(req: AuthRequest, res: Response): Promise<void>
 /**
  * Create client
  */
-export async function createClient(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
-        const permissions = req.user.permissions || [];
-        const canCreate = ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) || permissions.includes('manage_clients');
-        if (!canCreate) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
-
-        // Accept both event_date and legacy "date" from older frontend
-        const { name, subheading = null, event_date, date } = req.body;
-        const eventDate = event_date || date;
-
-        if (!name || !eventDate) {
-            res.status(400).json({ error: 'Name and event_date are required' });
-            return;
-        }
-
-        const slug = name.toLowerCase()
-            .replace(/[^\w\s-]/g, '')
-            .trim()
-            .replace(/\s+/g, '-')
-            .replace(/-+/g, '-');
-
-        const id = randomUUID();
-        const insertQuery = `
-          INSERT INTO clients (id, name, slug, subheading, event_date, status)
-          VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
-          RETURNING id, name, slug, subheading, event_date, status
-        `;
-
-        const { rows } = await pool.query(insertQuery, [id, name, slug, subheading, eventDate]);
-        res.status(201).json(rows[0]);
-    } catch (error) {
-        console.error('Create client error:', error);
-        res.status(500).json({ error: 'Failed to create client' });
+export const createClient = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    if (!req.user) {
+        throw new AppError('Unauthorized', 401);
     }
-}
+
+    const permissions = req.user.permissions || [];
+    const canCreate = ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) || permissions.includes('manage_clients');
+    if (!canCreate) {
+        throw new AppError('Forbidden', 403);
+    }
+
+    // Accept both event_date and legacy "date" from older frontend
+    const { name, subheading = null, event_date, date } = req.body;
+    const eventDate = event_date || date;
+
+    if (!name || !eventDate) {
+        throw new AppError('Name and event_date are required', 400);
+    }
+
+    const slug = name.toLowerCase()
+        .replace(/[^\w\s-]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
+
+    const id = randomUUID();
+    const insertQuery = `
+      INSERT INTO clients (id, name, slug, subheading, event_date, status)
+      VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+      RETURNING id, name, slug, subheading, event_date, status
+    `;
+
+    const { rows } = await pool.query(insertQuery, [id, name, slug, subheading, eventDate]);
+    success(res, rows[0], 201);
+});
 
 /**
  * @swagger
@@ -164,33 +154,26 @@ export async function createClient(req: AuthRequest, res: Response): Promise<voi
  *       401:
  *         description: Unauthorized
  */
-export async function getClientById(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        const { id } = req.params;
+export const getClientById = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    const { id } = req.params;
 
-        // Get client
-        const clientResult = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
-        if (clientResult.rows.length === 0) {
-            res.status(404).json({ error: 'Client not found' });
-            return;
-        }
-
-        // Get photos
-        // Get photos
-        const photosResult = await pool.query(
-            'SELECT id, url, filename, public_id, created_at FROM photos WHERE client_id = $1 ORDER BY created_at DESC LIMIT 500',
-            [id]
-        );
-
-        res.json({
-            client: clientResult.rows[0],
-            photos: photosResult.rows,
-        });
-    } catch (error) {
-        console.error('Get client error:', error);
-        res.status(500).json({ error: 'Failed to fetch client' });
+    // Get client
+    const clientResult = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+    if (clientResult.rows.length === 0) {
+        throw new AppError('Client not found', 404);
     }
-}
+
+    // Get photos
+    const photosResult = await pool.query(
+        'SELECT id, url, filename, public_id, created_at FROM photos WHERE client_id = $1 ORDER BY created_at DESC LIMIT 500',
+        [id]
+    );
+
+    success(res, {
+        client: clientResult.rows[0],
+        photos: photosResult.rows,
+    });
+});
 
 /**
  * @swagger
@@ -237,78 +220,71 @@ export async function getClientById(req: AuthRequest, res: Response): Promise<vo
  *       403:
  *         description: Forbidden
  */
-export async function updateClient(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        const { id } = req.params;
-        const body = req.body;
+export const updateClient = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    const { id } = req.params;
+    const body = req.body;
 
-        // Permission check
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
-        const permissions = req.user.permissions || [];
-        const canEdit = ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) || permissions.includes('manage_clients');
-
-        if (!canEdit) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
-
-        // Dynamic Query Construction
-        const updates: string[] = [];
-        const values: any[] = [];
-        let paramIndex = 1;
-
-        if (body.header_media_url !== undefined) {
-            updates.push(`header_media_url = $${paramIndex++}`);
-            values.push(body.header_media_url);
-        }
-        if (body.header_media_type !== undefined) {
-            updates.push(`header_media_type = $${paramIndex++}`);
-            values.push(body.header_media_type);
-        }
-        if (body.status !== undefined) {
-            updates.push(`status = $${paramIndex++}`);
-            values.push(body.status);
-            updates.push(`status_updated_at = NOW()`);
-        }
-        if (body.name !== undefined) {
-            updates.push(`name = $${paramIndex++}`);
-            values.push(body.name);
-
-            // Regenerate slug
-            const slug = body.name.toLowerCase()
-                .replace(/[^\w\s-]/g, '')
-                .trim()
-                .replace(/\s+/g, '-')
-                .replace(/-+/g, '-');
-
-            updates.push(`slug = $${paramIndex++}`);
-            values.push(slug);
-        }
-        if (body.subheading !== undefined) {
-            updates.push(`subheading = $${paramIndex++}`);
-            values.push(body.subheading);
-        }
-        if (body.event_date !== undefined) {
-            updates.push(`event_date = $${paramIndex++}`);
-            values.push(body.event_date);
-        }
-
-        if (updates.length > 0) {
-            values.push(id);
-            const query = `UPDATE clients SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
-            await pool.query(query, values);
-        }
-
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Update client error:', error);
-        res.status(500).json({ error: 'Failed to update client' });
+    // Permission check
+    if (!req.user) {
+        throw new AppError('Unauthorized', 401);
     }
-}
+
+    const permissions = req.user.permissions || [];
+    const canEdit = ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) || permissions.includes('manage_clients');
+
+    if (!canEdit) {
+        throw new AppError('Forbidden', 403);
+    }
+
+    // Dynamic Query Construction
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (body.header_media_url !== undefined) {
+        updates.push(`header_media_url = $${paramIndex++}`);
+        values.push(body.header_media_url);
+    }
+    if (body.header_media_type !== undefined) {
+        updates.push(`header_media_type = $${paramIndex++}`);
+        values.push(body.header_media_type);
+    }
+    if (body.status !== undefined) {
+        updates.push(`status = $${paramIndex++}`);
+        values.push(body.status);
+        updates.push(`status_updated_at = NOW()`);
+    }
+    if (body.name !== undefined) {
+        updates.push(`name = $${paramIndex++}`);
+        values.push(body.name);
+
+        // Regenerate slug
+        const slug = body.name.toLowerCase()
+            .replace(/[^\w\s-]/g, '')
+            .trim()
+            .replace(/\s+/g, '-')
+            .replace(/-+/g, '-');
+
+        updates.push(`slug = $${paramIndex++}`);
+        values.push(slug);
+    }
+    if (body.subheading !== undefined) {
+        updates.push(`subheading = $${paramIndex++}`);
+        values.push(body.subheading);
+    }
+    if (body.event_date !== undefined) {
+        updates.push(`event_date = $${paramIndex++}`);
+        values.push(body.event_date);
+    }
+
+    if (updates.length > 0) {
+        values.push(id);
+        const query = `UPDATE clients SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
+        await pool.query(query, values);
+    }
+
+    success(res, { success: true });
+});
 
 /**
  * @swagger
@@ -332,46 +308,39 @@ export async function updateClient(req: AuthRequest, res: Response): Promise<voi
  *       403:
  *         description: Forbidden
  */
-export async function deleteClient(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        const { id } = req.params;
+export const deleteClient = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    const { id } = req.params;
 
-        // Permission check
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
+    // Permission check
+    if (!req.user) {
+        throw new AppError('Unauthorized', 401);
+    }
 
-        const permissions = req.user.permissions || [];
-        const canDelete = ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) || permissions.includes('manage_clients');
+    const permissions = req.user.permissions || [];
+    const canDelete = ['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role) || permissions.includes('manage_clients');
 
-        if (!canDelete) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
+    if (!canDelete) {
+        throw new AppError('Forbidden', 403);
+    }
 
-        // Fetch photos to delete from Cloudinary
-        const photosResult = await pool.query('SELECT public_id FROM photos WHERE client_id = $1', [id]);
+    // Fetch photos to delete from Cloudinary
+    const photosResult = await pool.query('SELECT public_id FROM photos WHERE client_id = $1', [id]);
 
-        if (photosResult.rows.length > 0) {
-            const cloudinary = require('cloudinary').v2; // Lazy load or import at top
+    if (photosResult.rows.length > 0) {
+        const cloudinary = require('cloudinary').v2; // Lazy load or import at top
 
-            for (const photo of photosResult.rows) {
-                try {
-                    await cloudinary.uploader.destroy(photo.public_id);
-                } catch (e) {
-                    console.error(`Failed to delete Cloudinary image: ${photo.public_id}`, e);
-                }
+        for (const photo of photosResult.rows) {
+            try {
+                await cloudinary.uploader.destroy(photo.public_id);
+            } catch (e) {
+                console.error(`Failed to delete Cloudinary image: ${photo.public_id}`, e);
             }
         }
-
-        // Delete from DB
-        await pool.query('DELETE FROM photos WHERE client_id = $1', [id]);
-        await pool.query('DELETE FROM clients WHERE id = $1', [id]);
-
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Delete client error:', error);
-        res.status(500).json({ error: 'Failed to delete client' });
     }
-}
+
+    // Delete from DB
+    await pool.query('DELETE FROM photos WHERE client_id = $1', [id]);
+    await pool.query('DELETE FROM clients WHERE id = $1', [id]);
+
+    success(res, { success: true });
+});

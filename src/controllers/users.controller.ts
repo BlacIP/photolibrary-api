@@ -2,6 +2,9 @@ import { Response } from 'express';
 import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import bcrypt from 'bcryptjs';
+import { asyncHandler } from '../middleware/async-handler';
+import { AppError } from '../lib/errors';
+import { success } from '../lib/http';
 
 /**
  * @swagger
@@ -15,22 +18,16 @@ import bcrypt from 'bcryptjs';
  *       200:
  *         description: List of users
  */
-export async function getUsers(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
-
-        const { rows } = await pool.query(
-            'SELECT id, email, first_name, last_name, role, permissions, created_at FROM users ORDER BY created_at DESC'
-        );
-        res.json(rows);
-    } catch (error) {
-        console.error('Get users error:', error);
-        res.status(500).json({ error: 'Failed to fetch users' });
+export const getUsers = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
+        throw new AppError('Forbidden', 403);
     }
-}
+
+    const { rows } = await pool.query(
+        'SELECT id, email, first_name, last_name, role, permissions, created_at FROM users ORDER BY created_at DESC'
+    );
+    success(res, rows);
+});
 
 /**
  * @swagger
@@ -56,48 +53,40 @@ export async function getUsers(req: AuthRequest, res: Response): Promise<void> {
  *       200:
  *         description: User created
  */
-export async function createUser(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
-
-        const { email, password, role, firstName, lastName } = req.body;
-
-        // Basic validation
-        if (!email || !password || !role) {
-            res.status(400).json({ error: 'Missing required fields' });
-            return;
-        }
-
-        // Check exists
-        const exists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-        if (exists.rows.length > 0) {
-            res.status(400).json({ error: 'User already exists' });
-            return;
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const id = crypto.randomUUID();
-
-        // Default permissions for ADMIN
-        let permissions: string[] = [];
-        if (role === 'ADMIN') {
-            permissions = ['manage_clients', 'manage_photos'];
-        }
-
-        await pool.query(
-            'INSERT INTO users (id, email, password_hash, role, first_name, last_name, permissions, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())',
-            [id, email, hashedPassword, role, firstName || '', lastName || '', permissions]
-        );
-
-        res.json({ success: true, user: { id, email, role, firstName, lastName } });
-    } catch (error) {
-        console.error('Create user error:', error);
-        res.status(500).json({ error: 'Failed to create user' });
+export const createUser = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
+        throw new AppError('Forbidden', 403);
     }
-}
+
+    const { email, password, role, firstName, lastName } = req.body;
+
+    // Basic validation
+    if (!email || !password || !role) {
+        throw new AppError('Missing required fields', 400);
+    }
+
+    // Check exists
+    const exists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (exists.rows.length > 0) {
+        throw new AppError('User already exists', 400);
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const id = crypto.randomUUID();
+
+    // Default permissions for ADMIN
+    let permissions: string[] = [];
+    if (role === 'ADMIN') {
+        permissions = ['manage_clients', 'manage_photos'];
+    }
+
+    await pool.query(
+        'INSERT INTO users (id, email, password_hash, role, first_name, last_name, permissions, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())',
+        [id, email, hashedPassword, role, firstName || '', lastName || '', permissions]
+    );
+
+    success(res, { success: true, user: { id, email, role, firstName, lastName } });
+});
 
 /**
  * @swagger
@@ -108,24 +97,18 @@ export async function createUser(req: AuthRequest, res: Response): Promise<void>
  *     security:
  *       - cookieAuth: []
  */
-export async function updateUser(req: AuthRequest, res: Response): Promise<void> {
-    try {
-        if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
-            res.status(403).json({ error: 'Forbidden' });
-            return;
-        }
-
-        const { id } = req.params;
-        const { permissions, role } = req.body;
-
-        await pool.query(
-            'UPDATE users SET permissions = $1, role = $2 WHERE id = $3',
-            [permissions, role, id]
-        );
-
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Update user error:', error);
-        res.status(500).json({ error: 'Failed to update user' });
+export const updateUser = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    if (!req.user || !['SUPER_ADMIN', 'SUPER_ADMIN_MAX'].includes(req.user.role)) {
+        throw new AppError('Forbidden', 403);
     }
-}
+
+    const { id } = req.params;
+    const { permissions, role } = req.body;
+
+    await pool.query(
+        'UPDATE users SET permissions = $1, role = $2 WHERE id = $3',
+        [permissions, role, id]
+    );
+
+    success(res, { success: true });
+});
