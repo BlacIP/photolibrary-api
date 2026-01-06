@@ -20,7 +20,7 @@ const router = Router();
 router.get('/', authMiddleware, listLegacyClients);
 router.post('/', authMiddleware, createLegacyClient);
 router.get('/:id', authMiddleware, getLegacyClient);
-router.put('/:id', authMiddleware, updateLegacyClient as any);
-router.delete('/:id', authMiddleware, deleteLegacyClient as any);
+router.put('/:id', authMiddleware, updateLegacyClient);
+router.delete('/:id', authMiddleware, deleteLegacyClient);
 
 export default router;

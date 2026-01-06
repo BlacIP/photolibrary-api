@@ -4,6 +4,7 @@ import {
   saveLegacyPhotoRecord,
   deleteLegacyPhoto,
 } from '../controllers/legacy-admin.controller';
+import { downloadPhoto } from '../controllers/photos.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -17,6 +18,7 @@ const router = Router();
 
 router.post('/photos/upload-signature', authMiddleware, getLegacyUploadSignature);
 router.post('/photos/save-record', authMiddleware, saveLegacyPhotoRecord);
+router.get('/download', authMiddleware, downloadPhoto);
 router.delete('/photos/:id', authMiddleware, deleteLegacyPhoto);
 
 export default router;

@@ -2,8 +2,19 @@ import { Request, Response, NextFunction } from 'express';
 import { decrypt } from '../lib/auth';
 import { pool } from '../lib/db';
 
+type AuthUser = {
+    id: string;
+    role: string;
+    permissions?: string[];
+    email?: string;
+    name?: string;
+    first_name?: string;
+    last_name?: string;
+    [key: string]: unknown;
+};
+
 export interface AuthRequest extends Request {
-    user?: any;
+    user?: AuthUser;
 }
 
 export async function authMiddleware(

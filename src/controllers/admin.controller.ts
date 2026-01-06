@@ -65,7 +65,7 @@ export const getStorageStats = asyncHandler(async (req: AuthRequest, res: Respon
     const clients = clientsRes.rows;
 
     // Aggregate archived/deleted bytes if size column exists
-    let statusStats = {
+    const statusStats = {
         archived_bytes: 0,
         deleted_bytes: 0,
     };
@@ -95,9 +95,10 @@ export const getStorageStats = asyncHandler(async (req: AuthRequest, res: Respon
     try {
         const usage = await cloudinary.api.usage();
         cloudinaryStats = usage;
-    } catch (e: any) {
+    } catch (e: unknown) {
         console.error('Cloudinary usage error:', e);
-        cloudinaryStats = { error: e.message };
+        const message = e instanceof Error ? e.message : 'Cloudinary usage error';
+        cloudinaryStats = { error: message };
     }
 
     success(res, {

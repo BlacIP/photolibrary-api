@@ -1,12 +1,14 @@
 import { Response } from 'express';
-import { pool } from '../lib/db';
 import { AuthRequest } from '../middleware/auth.middleware';
-import { signUploadRequest } from '../lib/cloudinary';
-import cloudinary from '../lib/cloudinary';
-import { randomUUID } from 'crypto';
 import { asyncHandler } from '../middleware/async-handler';
 import { AppError } from '../lib/errors';
 import { success } from '../lib/http';
+import { fetchImageStream } from '../services/gallery/gallery-helpers';
+import {
+    deletePhotoRecord,
+    getUploadSignaturePayload,
+    savePhotoRecord,
+} from '../services/photos/photos-service';
 
 /**
  * @swagger
@@ -74,35 +76,8 @@ export const getUploadSignature = asyncHandler(async (req: AuthRequest, res: Res
         throw new AppError('Client ID required', 400);
     }
 
-    // Verify client exists
-    const clientCheck = await pool.query('SELECT id FROM clients WHERE id = $1', [clientId]);
-    if (clientCheck.rows.length === 0) {
-        throw new AppError('Client not found', 404);
-    }
-
-    // Generate upload signature
-    // Build folder so dev uploads go to photolibrary-demo/{clientId} and prod to photolibrary/{clientId}
-    const { timestamp, signature, folder: envFolder } = await signUploadRequest(clientId);
-    const cfg = cloudinary.config();
-    const cloudName =
-        cfg.cloud_name ||
-        process.env.CLOUDINARY_CLOUD_NAME ||
-        process.env.CLOUDINARY_URL?.split('@')[1];
-    const apiKey =
-        cfg.api_key ||
-        process.env.CLOUDINARY_API_KEY ||
-        process.env.CLOUDINARY_URL?.split(':')[1]?.split('@')[0];
-
-    success(res, {
-        timestamp,
-        signature,
-        folder: envFolder,
-        cloudName,
-        apiKey,
-        // Also provide snake_case keys for existing frontend consumption
-        cloud_name: cloudName,
-        api_key: apiKey,
-    });
+    const payload = await getUploadSignaturePayload(clientId);
+    success(res, payload);
 });
 
 /**
@@ -143,22 +118,14 @@ export const savePhotoRecord = asyncHandler(async (req: AuthRequest, res: Respon
         throw new AppError('Unauthorized', 401);
     }
 
-    const { clientId, publicId, url } = req.body;
+    const { clientId, publicId, url, filename } = req.body;
 
     if (!clientId || !publicId || !url) {
         throw new AppError('Missing required fields', 400);
     }
 
-    // Extract filename from public_id
-    const filename = publicId.split('/').pop() || 'uploaded_file';
-
-    // Save to database
-    await pool.query(
-        'INSERT INTO photos (id, client_id, url, filename, public_id) VALUES ($1, $2, $3, $4, $5)',
-        [randomUUID(), clientId, url, filename, publicId]
-    );
-
-    success(res, { success: true });
+    const result = await savePhotoRecord({ clientId, publicId, url, filename });
+    success(res, result);
 });
 
 /**
@@ -202,27 +169,81 @@ export const deletePhoto = asyncHandler(async (req: AuthRequest, res: Response):
     }
 
     const { id } = req.params;
-
-    // Fetch photo details
-    const photoResult = await pool.query('SELECT public_id FROM photos WHERE id = $1', [id]);
-
-    if (photoResult.rows.length === 0) {
-        throw new AppError('Photo not found', 404);
-    }
-
-    const photo = photoResult.rows[0];
-
-    // Delete from Cloudinary
-    try {
-        await cloudinary.uploader.destroy(photo.public_id);
-        console.log(`Deleted from Cloudinary: ${photo.public_id}`);
-    } catch (cloudinaryError) {
-        console.error(`Failed to delete from Cloudinary: ${photo.public_id}`, cloudinaryError);
-        // Continue with database deletion even if Cloudinary deletion fails
-    }
-
-    // Delete from database
-    await pool.query('DELETE FROM photos WHERE id = $1', [id]);
-
-    success(res, { success: true });
+    const result = await deletePhotoRecord(id);
+    success(res, result);
 });
+
+export const downloadPhoto = asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    if (!req.user) {
+        throw new AppError('Unauthorized', 401);
+    }
+
+    const url = typeof req.query.url === 'string' ? req.query.url : undefined;
+    if (!url) {
+        throw new AppError('url is required', 400);
+    }
+
+    const filename = resolveDownloadFilename({
+        filename: typeof req.query.filename === 'string' ? req.query.filename : undefined,
+        url,
+        publicId:
+            typeof req.query.publicId === 'string'
+                ? req.query.publicId
+                : typeof req.query.public_id === 'string'
+                    ? req.query.public_id
+                    : undefined,
+    });
+
+    const stream = await fetchImageStream(url);
+    if (!stream) {
+        throw new AppError('File not found', 404);
+    }
+
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    const contentType = stream.headers['content-type'];
+    if (contentType) {
+        res.setHeader('Content-Type', Array.isArray(contentType) ? contentType[0] : contentType);
+    }
+
+    stream.pipe(res);
+});
+
+function resolveDownloadFilename({
+    filename,
+    url,
+    publicId,
+}: {
+    filename?: string;
+    url: string;
+    publicId?: string;
+}) {
+    const direct = normalizeFilename(filename);
+    if (direct) return direct;
+
+    const fromUrl = normalizeFilename(extractFilenameFromUrl(url));
+    if (fromUrl) return fromUrl;
+
+    if (publicId) {
+        return publicId.split('/').pop() || publicId;
+    }
+
+    return 'download.jpg';
+}
+
+function extractFilenameFromUrl(url: string) {
+    try {
+        const pathname = new URL(url).pathname;
+        const lastSegment = pathname.split('/').pop();
+        return lastSegment ? decodeURIComponent(lastSegment) : null;
+    } catch {
+        const sanitized = url.split('?')[0];
+        const lastSegment = sanitized.split('/').pop();
+        return lastSegment ? decodeURIComponent(lastSegment) : null;
+    }
+}
+
+function normalizeFilename(value?: string | null) {
+    if (!value) return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+}
